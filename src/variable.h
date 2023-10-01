@@ -90,7 +90,7 @@ class Variable : protected Pointers {
   class RanMars *randomequal;   // random number generator for equal-style vars
   class RanMars *randomatom;    // random number generator for atom-style vars
 
-  int precedence[17];      // precedence level of math operators
+  int precedence[19];      // precedence level of math operators
                            // set length to include up to OR in enum
   int me;
 
@@ -122,6 +122,7 @@ class Variable : protected Pointers {
                       Tree **, Tree **, int &, double *, int &);
   int is_atom_vector(char *);
   void atom_vector(char *, Tree **, Tree **, int &);
+  void dynamic_index(char*, char*, Tree**, Tree**, int&);
   int is_constant(char *);
   double constant(char *);
   double numeric(char *);
