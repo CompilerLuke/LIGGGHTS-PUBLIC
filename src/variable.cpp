@@ -99,7 +99,7 @@ enum{DONE,ADD,SUBTRACT,MULTIPLY,DIVIDE,CARAT,MODULO,UNARY,
      SQRT,EXP,LN,LOG,ABS,SIN,COS,TAN,ASIN,ACOS,ATAN,ATAN2,
      RANDOM,NORMAL,CEIL,FLOOR,ROUND,RAMP,STAGGER,LOGFREQ,STRIDE,
      VDISPLACE,SWIGGLE,CWIGGLE,GMASK,RMASK,GRMASK,
-     VALUE,ATOMARRAY,TYPEARRAY,INTARRAY};
+     VALUE,ATOMARRAY,TYPEARRAY,INTARRAY,DYNAMICINDEX,CLAMP};
 
 // customize by adding a special function
 
@@ -1439,7 +1439,20 @@ double Variable::evaluate(char *str, Tree **tree)
         // atom value
         // ----------------
 
-        } else if (str[i] == '[') {
+        }
+        else if (str[i] == '.') {
+            i++;
+            if(str[i] != '(') {
+                error->all(FLERR, "Variable eval : expecting .[");
+            }
+            char *contents;
+            i = find_matching_paren(str,i,contents);
+            i++;
+
+            dynamic_index(word,contents,tree,treestack,ntreestack);
+            delete[] contents;
+        }
+        else if (str[i] == '[') {
           if (domain->box_exist == 0)
             error->all(FLERR,
                        "Variable evaluation before simulation box is defined");
@@ -1644,7 +1657,9 @@ double Variable::evaluate(char *str, Tree **tree)
 
       opstack[nopstack++] = op;
 
-    } else error->all(FLERR,"Invalid syntax in variable formula");
+    } else {
+        error->all(FLERR,"Invalid syntax in variable formula");
+    }
   }
 
   if (nopstack) error->all(FLERR,"Invalid syntax in variable formula");
@@ -2135,6 +2150,18 @@ double Variable::eval_tree(Tree *tree, int i)
   if (tree->type == ATOMARRAY) return tree->array[i*tree->nstride];
   if (tree->type == TYPEARRAY) return tree->array[atom->type[i]];
   if (tree->type == INTARRAY) return (double) tree->iarray[i*tree->nstride];
+  if (tree->type == DYNAMICINDEX) {
+      int index = (int) eval_tree(tree->left, i);
+      double val = tree->array[index];
+      double x = atom->x[0][3*i +0];
+      double y = atom->x[0][3*i +1];
+      double z = atom->x[0][3*i + 2];
+
+      double dist = exp(-(y*y + z*z)*10);
+      //printf("[%f %f %f] expecting %f, got %f\n", x,y,z,dist,val);
+
+      return val; // dist; //todo: bounds check
+  }
 
   if (tree->type == ADD)
     return eval_tree(tree->left,i) + eval_tree(tree->right,i);
@@ -2196,6 +2223,13 @@ double Variable::eval_tree(Tree *tree, int i)
     if (eval_tree(tree->left,i) != 0.0 || eval_tree(tree->right,i) != 0.0)
       return 1.0;
     else return 0.0;
+  }
+
+  if(tree->type == CLAMP) {
+      arg1 = eval_tree(tree->left, i);
+      arg2 = eval_tree(tree->middle, i);
+      arg3 = eval_tree(tree->right, i);
+      return std::clamp(arg1,arg2,arg3);
   }
 
   if (tree->type == SQRT) {
@@ -2496,7 +2530,7 @@ int Variable::math_function(char *word, char *contents, Tree **tree,
       strcmp(word,"ramp") && strcmp(word,"stagger") &&
       strcmp(word,"logfreq") && strcmp(word,"stride") &&
       strcmp(word,"vdisplace") &&
-      strcmp(word,"swiggle") && strcmp(word,"cwiggle"))
+      strcmp(word,"swiggle") && strcmp(word,"cwiggle") && strcmp(word,"clamp"))
     return 0;
 
   // parse contents for arg1,arg2,arg3 separated by commas
@@ -2569,7 +2603,14 @@ int Variable::math_function(char *word, char *contents, Tree **tree,
     }
   }
 
-  if (strcmp(word,"sqrt") == 0) {
+  if(strcmp(word,"clamp")==0) {
+      if(narg != 3) error->all(FLERR, "Expecting three parameters to clamp function");
+      if(tree) newtree->type = CLAMP;
+      else {
+          argstack[nargstack++] = std::clamp(value1,value2,value3);
+      }
+  }
+  else if (strcmp(word,"sqrt") == 0) {
     if (narg != 1)
       error->all(FLERR,"Invalid math function in variable formula");
     if (tree) newtree->type = SQRT;
@@ -3583,6 +3624,34 @@ void Variable::atom_vector(char *word, Tree **tree,
     newtree->nstride = 1;
     newtree->array = atom->radius;
   }
+}
+
+void Variable::dynamic_index(char *word, char* contents, Tree **tree, Tree **treestack, int &ntreestack) {
+    if (tree == NULL)
+        error->all(FLERR,"Dynamic index in equal-style variable formula");
+
+    int id = find(word);
+    if(id == -1) {
+        error->all(FLERR, "Unknown variable");
+    }
+
+    Tree *newtree = new Tree();
+    newtree->type = DYNAMICINDEX;
+    newtree->nstride = 1;
+    newtree->selfalloc = 0;
+    newtree->left = newtree->middle = newtree->right = NULL;
+
+    int n = num[id];
+
+    newtree->array = new double[n];
+    newtree->selfalloc = true;
+    for(int i = 0; i < n; i++) {
+        newtree->array[i] = atof(data[id][i]);
+    }
+
+    evaluate(contents, &newtree->left);
+
+    treestack[ntreestack++] = newtree;
 }
 
 /* ----------------------------------------------------------------------
